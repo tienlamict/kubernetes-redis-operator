@@ -1,0 +1,49 @@
+domain: example.com
+layout:
+- go.kubebuilder.io/v4
+projectName: redis-operator
+repo: github.com/example/redis-operator
+version: "3"
+plugins:
+  manifests.sdk.operatorframework.io/v2: {}
+  scorecard.sdk.operatorframework.io/v2: {}
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: redis
+  kind: Redis
+  path: github.com/example/redis-operator/api/v1alpha1
+  version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: redis
+  kind: RedisSentinel
+  path: github.com/example/redis-operator/api/v1alpha1
+  version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: redis
+  kind: RedisCluster
+  path: github.com/example/redis-operator/api/v1alpha1
+  version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1

@@ -1,0 +1,32 @@
+apiVersion: redis.example.com/v1alpha1
+kind: RedisSentinel
+metadata:
+  name: my-redis-ha
+  namespace: default
+spec:
+  replicas: 3
+  sentinelReplicas: 3
+  image: redis:7.2-alpine
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+  sentinelResources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "128Mi"
+  storage:
+    className: standard
+    size: "10Gi"
+  redisConfig:
+    maxmemory: "400mb"
+    maxmemory-policy: "allkeys-lru"
+  auth:
+    secretName: redis-password
+  enableExporter: true

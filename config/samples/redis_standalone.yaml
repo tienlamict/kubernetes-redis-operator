@@ -1,0 +1,25 @@
+apiVersion: redis.example.com/v1alpha1
+kind: Redis
+metadata:
+  name: my-redis
+  namespace: default
+spec:
+  image: redis:7.2-alpine
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  storage:
+    className: standard
+    size: "5Gi"
+    keepAfterDeletion: false
+  redisConfig:
+    maxmemory: "200mb"
+    maxmemory-policy: "allkeys-lru"
+  auth:
+    secretName: redis-password
+  enableExporter: true
+  exporterImage: oliver006/redis_exporter:latest

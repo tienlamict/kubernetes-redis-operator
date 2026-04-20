@@ -1,0 +1,53 @@
+apiVersion: redis.example.com/v1alpha1
+kind: RedisCluster
+metadata:
+  name: my-redis-cluster
+  namespace: default
+spec:
+  masters: 3
+  replicasPerMaster: 1
+  image: redis:7.2-alpine
+  masterResources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "1Gi"
+  replicaResources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+  storage:
+    className: standard
+    size: "20Gi"
+  redisConfig:
+    maxmemory: "400mb"
+    maxmemory-policy: "volatile-lru"
+    cluster-node-timeout: "15000"
+  auth:
+    secretName: redis-cluster-password
+  enableExporter: true
+  masterAffinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values: ["master"]
+            topologyKey: kubernetes.io/hostname
+---
+# Scale-out example: increase masters from 3 to 5.
+# apiVersion: redis.example.com/v1alpha1
+# kind: RedisCluster
+# metadata:
+#   name: my-redis-cluster
+# spec:
+#   masters: 5
+#   replicasPerMaster: 1
