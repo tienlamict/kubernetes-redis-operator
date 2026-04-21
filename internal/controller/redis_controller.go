@@ -22,6 +22,7 @@ import (
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	redisv1alpha1 "github.com/example/redis-operator/api/v1alpha1"
+	oprmetrics "github.com/example/redis-operator/internal/metrics"
 	"github.com/example/redis-operator/internal/redis"
 	"github.com/example/redis-operator/internal/resources"
 )
@@ -62,7 +63,16 @@ type RedisReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods;services;configmaps;secrets;persistentvolumeclaims;events,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
+// Reconcile is the controller-runtime entry point. It records Prometheus metrics
+// for every reconcile invocation and delegates to doReconcile for business logic.
 func (r *RedisReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	start := time.Now()
+	result, err := r.doReconcile(ctx, req)
+	oprmetrics.RecordReconcile(oprmetrics.KindRedis, start, err)
+	return result, err
+}
+
+func (r *RedisReconciler) doReconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	redisObj := &redisv1alpha1.Redis{}

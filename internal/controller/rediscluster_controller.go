@@ -21,6 +21,7 @@ import (
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	redisv1alpha1 "github.com/example/redis-operator/api/v1alpha1"
+	oprmetrics "github.com/example/redis-operator/internal/metrics"
 	"github.com/example/redis-operator/internal/redis"
 	"github.com/example/redis-operator/internal/resources"
 )
@@ -43,7 +44,16 @@ type RedisClusterReconciler struct {
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
+// Reconcile is the controller-runtime entry point. It records Prometheus metrics
+// for every reconcile invocation and delegates to doReconcile for business logic.
 func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	start := time.Now()
+	result, err := r.doReconcile(ctx, req)
+	oprmetrics.RecordReconcile(oprmetrics.KindCluster, start, err)
+	return result, err
+}
+
+func (r *RedisClusterReconciler) doReconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	rc := &redisv1alpha1.RedisCluster{}
@@ -161,6 +171,8 @@ func (r *RedisClusterReconciler) handleClusterDeletion(ctx context.Context, rc *
 		}
 	}
 
+	// Remove per-cluster Prometheus gauge series so stale metrics are not exported.
+	oprmetrics.DeleteClusterMetrics(rc.Name, rc.Namespace)
 	r.Recorder.Event(rc, corev1.EventTypeNormal, "Deleted", "RedisCluster instance cleaned up")
 	controllerutil.RemoveFinalizer(rc, redisv1alpha1.FinalizerName)
 	return ctrl.Result{}, r.Update(ctx, rc)
@@ -330,6 +342,7 @@ func (r *RedisClusterReconciler) reconcileClusterLifecycle(ctx context.Context, 
 	if clusterState.State == "fail" {
 		if rc.Status.Phase != redisv1alpha1.PhaseRecovering {
 			rc.Status.Phase = redisv1alpha1.PhaseRecovering
+			oprmetrics.RecordClusterFailover(rc.Name, rc.Namespace)
 			r.Recorder.Event(rc, corev1.EventTypeWarning, "ClusterFailing",
 				"Redis Cluster is in fail state; waiting for automatic recovery")
 		}
@@ -357,6 +370,7 @@ func (r *RedisClusterReconciler) reconcileClusterLifecycle(ctx context.Context, 
 // reconcileScaleOut adds new master (and replica) nodes and rebalances slots.
 func (r *RedisClusterReconciler) reconcileScaleOut(ctx context.Context, rc *redisv1alpha1.RedisCluster, currentMasters int32) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	scalingStart := time.Now()
 	rc.Status.Phase = redisv1alpha1.PhaseScaling
 
 	if !r.allMasterPodsReady(ctx, rc) {
@@ -395,6 +409,7 @@ func (r *RedisClusterReconciler) reconcileScaleOut(ctx context.Context, rc *redi
 		}
 	}
 
+	oprmetrics.RecordClusterScaling(rc.Name, rc.Namespace, "out", scalingStart)
 	r.Recorder.Event(rc, corev1.EventTypeNormal, "ScaleOut",
 		fmt.Sprintf("Scaled from %d to %d masters", currentMasters, rc.Spec.Masters))
 	rc.Status.Phase = redisv1alpha1.PhaseReady
@@ -404,6 +419,7 @@ func (r *RedisClusterReconciler) reconcileScaleOut(ctx context.Context, rc *redi
 // reconcileScaleIn migrates slots away from excess masters, then removes them.
 func (r *RedisClusterReconciler) reconcileScaleIn(ctx context.Context, rc *redisv1alpha1.RedisCluster, currentMasters int32) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	scalingStart := time.Now()
 	rc.Status.Phase = redisv1alpha1.PhaseScaling
 
 	existingAddr := clusterMasterAddr(rc, 0)
@@ -437,6 +453,7 @@ func (r *RedisClusterReconciler) reconcileScaleIn(ctx context.Context, rc *redis
 		}
 	}
 
+	oprmetrics.RecordClusterScaling(rc.Name, rc.Namespace, "in", scalingStart)
 	r.Recorder.Event(rc, corev1.EventTypeNormal, "ScaleIn",
 		fmt.Sprintf("Scaled from %d to %d masters", currentMasters, rc.Spec.Masters))
 	rc.Status.Phase = redisv1alpha1.PhaseReady
@@ -539,6 +556,10 @@ func (r *RedisClusterReconciler) updateClusterStatus(ctx context.Context, rc *re
 	rc.Status.ClusterState = clusterState
 	rc.Status.AssignedSlots = assignedSlots
 	rc.Status.Nodes = nodeStatuses
+
+	// Update Prometheus gauges with the freshly computed values.
+	oprmetrics.SetClusterMetrics(rc.Name, rc.Namespace, clusterState,
+		assignedSlots, int32(len(nodeStatuses)), readyMasters, readyReplicas)
 
 	return r.Status().Update(ctx, rc)
 }

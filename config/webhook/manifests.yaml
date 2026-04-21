@@ -1,0 +1,133 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-redis-example-com-v1alpha1-redis
+  failurePolicy: Fail
+  name: mredis.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - redis
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-redis-example-com-v1alpha1-rediscluster
+  failurePolicy: Fail
+  name: mrediscluster.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - redisclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-redis-example-com-v1alpha1-redissentinel
+  failurePolicy: Fail
+  name: mredissentinel.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - redissentinels
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-redis-example-com-v1alpha1-redis
+  failurePolicy: Fail
+  name: vredis.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - redis
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-redis-example-com-v1alpha1-rediscluster
+  failurePolicy: Fail
+  name: vrediscluster.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - redisclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-redis-example-com-v1alpha1-redissentinel
+  failurePolicy: Fail
+  name: vredissentinel.kb.io
+  rules:
+  - apiGroups:
+    - redis.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - redissentinels
+  sideEffects: None
