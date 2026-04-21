@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -59,23 +60,7 @@ var _ webhook.Validator = &RedisCluster{}
 // ValidateCreate validates a newly created RedisCluster resource.
 func (r *RedisCluster) ValidateCreate() (admission.Warnings, error) {
 	redisclusterlog.Info("validate create", "name", r.Name)
-
-	if r.Spec.Masters < 3 {
-		return nil, fmt.Errorf("spec.masters must be at least 3, got %d", r.Spec.Masters)
-	}
-	if r.Spec.ReplicasPerMaster < 0 {
-		return nil, fmt.Errorf("spec.replicasPerMaster must be >= 0, got %d", r.Spec.ReplicasPerMaster)
-	}
-	totalNodes := r.Spec.Masters + r.Spec.Masters*r.Spec.ReplicasPerMaster
-	if totalNodes > 100 {
-		return nil, fmt.Errorf("total node count %d exceeds the limit of 100", totalNodes)
-	}
-
-	var warnings admission.Warnings
-	if r.Spec.Masters%2 == 0 {
-		warnings = append(warnings, fmt.Sprintf("spec.masters=%d is even; an odd number is recommended for quorum", r.Spec.Masters))
-	}
-	return warnings, nil
+	return r.validateClusterSpec()
 }
 
 // ValidateUpdate validates an update to an existing RedisCluster resource.
@@ -86,6 +71,11 @@ func (r *RedisCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, e
 	if !ok {
 		return nil, fmt.Errorf("expected a RedisCluster object for the old resource")
 	}
+
+	if warnings, err := r.validateClusterSpec(); err != nil {
+		return warnings, err
+	}
+
 	if r.Spec.Masters < 3 {
 		return nil, fmt.Errorf("cannot scale spec.masters below 3")
 	}
@@ -94,9 +84,36 @@ func (r *RedisCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, e
 			oldCluster.Spec.Masters, r.Spec.Masters)
 	}
 	if oldCluster.Status.Phase == PhaseScaling {
-		return nil, fmt.Errorf("cannot delete or modify cluster while it is in %s phase", PhaseScaling)
+		return nil, fmt.Errorf("cannot modify cluster while it is in %s phase", PhaseScaling)
 	}
-	return r.ValidateCreate()
+
+	// Storage immutability.
+	if oldCluster.Spec.Storage == nil && r.Spec.Storage != nil {
+		return nil, fmt.Errorf("cannot add storage to an existing RedisCluster instance")
+	}
+	if oldCluster.Spec.Storage != nil && r.Spec.Storage == nil {
+		return nil, fmt.Errorf("cannot remove storage from an existing RedisCluster instance")
+	}
+	if oldCluster.Spec.Storage != nil && r.Spec.Storage != nil {
+		oldClass, newClass := "", ""
+		if oldCluster.Spec.Storage.ClassName != nil {
+			oldClass = *oldCluster.Spec.Storage.ClassName
+		}
+		if r.Spec.Storage.ClassName != nil {
+			newClass = *r.Spec.Storage.ClassName
+		}
+		if oldClass != newClass {
+			return nil, fmt.Errorf("spec.storage.storageClassName is immutable after creation")
+		}
+		oldQty, err1 := resource.ParseQuantity(oldCluster.Spec.Storage.Size)
+		newQty, err2 := resource.ParseQuantity(r.Spec.Storage.Size)
+		if err1 == nil && err2 == nil && newQty.Cmp(oldQty) < 0 {
+			return nil, fmt.Errorf("spec.storage.size cannot be decreased (from %s to %s)",
+				oldCluster.Spec.Storage.Size, r.Spec.Storage.Size)
+		}
+	}
+
+	return nil, nil
 }
 
 // ValidateDelete validates a deletion request.
@@ -106,4 +123,32 @@ func (r *RedisCluster) ValidateDelete() (admission.Warnings, error) {
 		return nil, fmt.Errorf("cannot delete cluster while it is in %s phase", PhaseScaling)
 	}
 	return nil, nil
+}
+
+// validateClusterSpec validates static constraints on the cluster spec.
+func (r *RedisCluster) validateClusterSpec() (admission.Warnings, error) {
+	if r.Spec.Masters < 3 {
+		return nil, fmt.Errorf("spec.masters must be at least 3, got %d", r.Spec.Masters)
+	}
+	if r.Spec.ReplicasPerMaster < 0 {
+		return nil, fmt.Errorf("spec.replicasPerMaster must be >= 0, got %d", r.Spec.ReplicasPerMaster)
+	}
+	totalNodes := r.Spec.Masters + r.Spec.Masters*r.Spec.ReplicasPerMaster
+	if totalNodes > 100 {
+		return nil, fmt.Errorf("total node count %d exceeds the limit of 100", totalNodes)
+	}
+	if r.Spec.Storage != nil {
+		if r.Spec.Storage.Size == "" {
+			return nil, fmt.Errorf("spec.storage.size must not be empty when storage is configured")
+		}
+		if _, err := resource.ParseQuantity(r.Spec.Storage.Size); err != nil {
+			return nil, fmt.Errorf("spec.storage.size %q is not a valid resource.Quantity: %w", r.Spec.Storage.Size, err)
+		}
+	}
+
+	var warnings admission.Warnings
+	if r.Spec.Masters%2 == 0 {
+		warnings = append(warnings, fmt.Sprintf("spec.masters=%d is even; an odd number is recommended for quorum", r.Spec.Masters))
+	}
+	return warnings, nil
 }

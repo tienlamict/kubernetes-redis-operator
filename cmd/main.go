@@ -81,16 +81,18 @@ func main() {
 
 	// Register controllers.
 	if err := (&controller.RedisReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("redis-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Redis")
 		os.Exit(1)
 	}
 
 	if err := (&controller.RedisSentinelReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("redissentinel-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RedisSentinel")
 		os.Exit(1)
@@ -101,6 +103,7 @@ func main() {
 		Scheme:         mgr.GetScheme(),
 		RedisClient:    rc,
 		ClusterManager: cm,
+		Recorder:       mgr.GetEventRecorderFor("rediscluster-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RedisCluster")
 		os.Exit(1)

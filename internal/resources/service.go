@@ -40,12 +40,10 @@ func BuildRedisService(redis *redisv1alpha1.Redis) *corev1.Service {
 }
 
 // BuildSentinelMasterService creates the ClusterIP Service that always points to the current master.
+// The selector uses the RoleLabelKey label which the controller updates on each reconcile after
+// querying Sentinel for the current master pod.
 func BuildSentinelMasterService(rs *redisv1alpha1.RedisSentinel) *corev1.Service {
 	labels := CommonLabels(rs.Name, ComponentMaster)
-	selector := map[string]string{
-		labelInstance:  rs.Name,
-		labelComponent: ComponentMaster,
-	}
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rs.Name + "-master",
@@ -53,8 +51,11 @@ func BuildSentinelMasterService(rs *redisv1alpha1.RedisSentinel) *corev1.Service
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: selector,
+			Type: corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{
+				labelInstance: rs.Name,
+				RoleLabelKey:  RoleMaster,
+			},
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "redis",
@@ -68,12 +69,9 @@ func BuildSentinelMasterService(rs *redisv1alpha1.RedisSentinel) *corev1.Service
 }
 
 // BuildSentinelReplicaService creates the ClusterIP Service pointing to all Redis replicas.
+// The selector uses the RoleLabelKey label which the controller updates on each reconcile.
 func BuildSentinelReplicaService(rs *redisv1alpha1.RedisSentinel) *corev1.Service {
 	labels := CommonLabels(rs.Name, ComponentReplica)
-	selector := map[string]string{
-		labelInstance:  rs.Name,
-		labelComponent: ComponentReplica,
-	}
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rs.Name + "-replica",
@@ -81,8 +79,11 @@ func BuildSentinelReplicaService(rs *redisv1alpha1.RedisSentinel) *corev1.Servic
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: selector,
+			Type: corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{
+				labelInstance: rs.Name,
+				RoleLabelKey:  RoleReplica,
+			},
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "redis",

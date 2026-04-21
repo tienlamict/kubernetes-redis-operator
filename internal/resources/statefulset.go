@@ -131,7 +131,7 @@ func BuildClusterMasterStatefulSet(rc *redisv1alpha1.RedisCluster) *appsv1.State
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      rc.Name + "-masters",
+			Name:      ClusterMasterStatefulSetName(rc.Name),
 			Namespace: rc.Namespace,
 			Labels:    labels,
 		},
@@ -181,7 +181,7 @@ func BuildClusterReplicaStatefulSet(rc *redisv1alpha1.RedisCluster) *appsv1.Stat
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      rc.Name + "-replicas",
+			Name:      ClusterReplicaStatefulSetName(rc.Name),
 			Namespace: rc.Namespace,
 			Labels:    labels,
 		},

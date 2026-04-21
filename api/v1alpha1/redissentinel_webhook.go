@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -55,7 +56,71 @@ var _ webhook.Validator = &RedisSentinel{}
 // ValidateCreate validates a newly created RedisSentinel resource.
 func (r *RedisSentinel) ValidateCreate() (admission.Warnings, error) {
 	redissentinellog.Info("validate create", "name", r.Name)
+	return r.validateSentinelSpec()
+}
 
+// ValidateUpdate validates an update to an existing RedisSentinel resource.
+func (r *RedisSentinel) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
+	redissentinellog.Info("validate update", "name", r.Name)
+
+	oldSentinel, ok := old.(*RedisSentinel)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type %T for old object", old)
+	}
+
+	// Validate the new spec first.
+	if _, err := r.validateSentinelSpec(); err != nil {
+		return nil, err
+	}
+
+	// Prevent scaling Redis replicas below 3.
+	if r.Spec.Replicas < 3 {
+		return nil, fmt.Errorf("cannot scale spec.replicas below 3, got %d", r.Spec.Replicas)
+	}
+	// Prevent scaling down Sentinel replicas below 3.
+	if r.Spec.SentinelReplicas < 3 {
+		return nil, fmt.Errorf("cannot scale spec.sentinelReplicas below 3, got %d", r.Spec.SentinelReplicas)
+	}
+
+	// Storage immutability checks.
+	if oldSentinel.Spec.Storage == nil && r.Spec.Storage != nil {
+		return nil, fmt.Errorf("cannot add storage to an existing RedisSentinel instance")
+	}
+	if oldSentinel.Spec.Storage != nil && r.Spec.Storage == nil {
+		return nil, fmt.Errorf("cannot remove storage from an existing RedisSentinel instance")
+	}
+	if oldSentinel.Spec.Storage != nil && r.Spec.Storage != nil {
+		oldClass := ""
+		if oldSentinel.Spec.Storage.ClassName != nil {
+			oldClass = *oldSentinel.Spec.Storage.ClassName
+		}
+		newClass := ""
+		if r.Spec.Storage.ClassName != nil {
+			newClass = *r.Spec.Storage.ClassName
+		}
+		if oldClass != newClass {
+			return nil, fmt.Errorf("spec.storage.storageClassName is immutable after creation")
+		}
+
+		oldQty, err1 := resource.ParseQuantity(oldSentinel.Spec.Storage.Size)
+		newQty, err2 := resource.ParseQuantity(r.Spec.Storage.Size)
+		if err1 == nil && err2 == nil && newQty.Cmp(oldQty) < 0 {
+			return nil, fmt.Errorf("spec.storage.size cannot be decreased (from %s to %s)",
+				oldSentinel.Spec.Storage.Size, r.Spec.Storage.Size)
+		}
+	}
+
+	return nil, nil
+}
+
+// ValidateDelete validates a deletion request.
+func (r *RedisSentinel) ValidateDelete() (admission.Warnings, error) {
+	redissentinellog.Info("validate delete", "name", r.Name)
+	return nil, nil
+}
+
+// validateSentinelSpec validates the static constraints on the sentinel spec.
+func (r *RedisSentinel) validateSentinelSpec() (admission.Warnings, error) {
 	if r.Spec.Replicas < 3 {
 		return nil, fmt.Errorf("spec.replicas must be at least 3, got %d", r.Spec.Replicas)
 	}
@@ -65,21 +130,13 @@ func (r *RedisSentinel) ValidateCreate() (admission.Warnings, error) {
 	if r.Spec.SentinelReplicas%2 == 0 {
 		return nil, fmt.Errorf("spec.sentinelReplicas must be odd for quorum, got %d", r.Spec.SentinelReplicas)
 	}
-	return nil, nil
-}
-
-// ValidateUpdate validates an update to an existing RedisSentinel resource.
-func (r *RedisSentinel) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
-	redissentinellog.Info("validate update", "name", r.Name)
-	oldSentinel, ok := old.(*RedisSentinel)
-	if ok && r.Spec.Replicas < 3 && r.Spec.Replicas < oldSentinel.Spec.Replicas {
-		return nil, fmt.Errorf("cannot scale spec.replicas below 3")
+	if r.Spec.Storage != nil {
+		if r.Spec.Storage.Size == "" {
+			return nil, fmt.Errorf("spec.storage.size must not be empty when storage is configured")
+		}
+		if _, err := resource.ParseQuantity(r.Spec.Storage.Size); err != nil {
+			return nil, fmt.Errorf("spec.storage.size %q is not a valid resource.Quantity: %w", r.Spec.Storage.Size, err)
+		}
 	}
-	return r.ValidateCreate()
-}
-
-// ValidateDelete validates a deletion request.
-func (r *RedisSentinel) ValidateDelete() (admission.Warnings, error) {
-	redissentinellog.Info("validate delete", "name", r.Name)
 	return nil, nil
 }
