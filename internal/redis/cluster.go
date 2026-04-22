@@ -157,6 +157,8 @@ func (m *clusterManager) AssignSlotsEvenly(ctx context.Context, masterAddrs []st
 }
 
 // MigrateSlot migrates a single hash slot from sourceAddr to destAddr.
+// If key migration fails after the slot has been placed in MIGRATING/IMPORTING state,
+// CLUSTER SETSLOT STABLE is issued on both nodes so the cluster can recover cleanly.
 func (m *clusterManager) MigrateSlot(ctx context.Context, sourceAddr, destAddr string, slot int) error {
 	destIP, destPort, err := splitAddr(destAddr)
 	if err != nil {
@@ -190,23 +192,17 @@ func (m *clusterManager) MigrateSlot(ctx context.Context, sourceAddr, destAddr s
 
 	// MIGRATING on source.
 	if err := m.client.ClusterSetSlot(ctx, sourceAddr, slot, "MIGRATING", destNodeID); err != nil {
+		// Roll back the IMPORTING state so the slot isn't stuck.
+		_ = m.client.ClusterSetSlot(ctx, destAddr, slot, "STABLE", "")
 		return fmt.Errorf("CLUSTER SETSLOT %d MIGRATING: %w", slot, err)
 	}
 
-	// Migrate all keys in batches.
-	for {
-		keys, err := m.client.ClusterGetKeysInSlot(ctx, sourceAddr, slot, migrateBatch)
-		if err != nil {
-			return fmt.Errorf("CLUSTER GETKEYSINSLOT %d: %w", slot, err)
-		}
-		if len(keys) == 0 {
-			break
-		}
-		for _, key := range keys {
-			if err := m.client.Migrate(ctx, sourceAddr, destIP, destPort, key, 0, migrateTimeout); err != nil {
-				return fmt.Errorf("MIGRATE key %q to %s:%d: %w", key, destIP, destPort, err)
-			}
-		}
+	// Migrate all keys in batches.  On failure, reset both ends to STABLE so the
+	// cluster doesn't get stuck in a partial-migration state (spec 11.4).
+	if err := m.migrateKeys(ctx, sourceAddr, destIP, destPort, slot); err != nil {
+		_ = m.client.ClusterSetSlot(ctx, sourceAddr, slot, "STABLE", "")
+		_ = m.client.ClusterSetSlot(ctx, destAddr, slot, "STABLE", "")
+		return fmt.Errorf("migrating keys in slot %d: %w", slot, err)
 	}
 
 	// Commit the slot to the destination node on all cluster members.
@@ -221,6 +217,24 @@ func (m *clusterManager) MigrateSlot(ctx context.Context, sourceAddr, destAddr s
 		}
 	}
 	return nil
+}
+
+// migrateKeys moves all keys in a slot from source to destination in batches.
+func (m *clusterManager) migrateKeys(ctx context.Context, sourceAddr, destIP string, destPort, slot int) error {
+	for {
+		keys, err := m.client.ClusterGetKeysInSlot(ctx, sourceAddr, slot, migrateBatch)
+		if err != nil {
+			return fmt.Errorf("CLUSTER GETKEYSINSLOT %d: %w", slot, err)
+		}
+		if len(keys) == 0 {
+			return nil
+		}
+		for _, key := range keys {
+			if err := m.client.Migrate(ctx, sourceAddr, destIP, destPort, key, 0, migrateTimeout); err != nil {
+				return fmt.Errorf("MIGRATE key %q to %s:%d: %w", key, destIP, destPort, err)
+			}
+		}
+	}
 }
 
 // MigrateSlotsRange migrates a contiguous range of slots.

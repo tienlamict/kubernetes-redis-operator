@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	configHashAnnotation = "redis.example.com/config-hash"
-	conditionReady       = "Ready"
+	configHashAnnotation     = "redis.example.com/config-hash"
+	lastConfigHashAnnotation = "redis.example.com/last-config-hash"
+	conditionReady           = "Ready"
 
 	reasonReady       = "Ready"
 	reasonReconciling = "Reconciling"

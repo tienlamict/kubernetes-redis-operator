@@ -71,8 +71,16 @@ func BuildSentinelRedisStatefulSet(rs *redisv1alpha1.RedisSentinel) *appsv1.Stat
 		rs.Spec.Tolerations,
 		rs.Spec.NodeSelector,
 		ConfigMapNameForRedis(rs.Name),
-		false,
+		rs.Spec.Storage != nil,
 	)
+
+	// Inject SENTINEL_SVC so the pre-stop hook can trigger Sentinel failover when this
+	// pod is the current master.
+	sentinelSvcHost := fmt.Sprintf("%s-sentinel.%s.svc.cluster.local", rs.Name, rs.Namespace)
+	podSpec.Containers[0].Env = append(podSpec.Containers[0].Env, corev1.EnvVar{
+		Name:  "SENTINEL_SVC",
+		Value: sentinelSvcHost,
+	})
 
 	// Add init container that configures replication on startup.
 	podSpec.InitContainers = []corev1.Container{
@@ -340,7 +348,16 @@ func buildRedisContainer(
 		Lifecycle: &corev1.Lifecycle{
 			PreStop: &corev1.LifecycleHandler{
 				Exec: &corev1.ExecAction{
-					Command: []string{"/scripts/redis-shutdown.sh"},
+					// Inline script: SAVE data, then trigger Sentinel failover if this pod is
+					// currently the master.  SENTINEL_SVC must be set for failover to run.
+					// REDISCLI_AUTH is already present in the container env when auth is configured.
+					Command: []string{"sh", "-c",
+						"redis-cli SAVE || true; " +
+							"ROLE=$(redis-cli ROLE 2>/dev/null | head -1 || echo unknown); " +
+							"if [ \"$ROLE\" = \"master\" ] && [ -n \"$SENTINEL_SVC\" ]; then " +
+							"redis-cli -p 26379 -h \"$SENTINEL_SVC\" SENTINEL FAILOVER mymaster || true; " +
+							"sleep 5; fi",
+					},
 				},
 			},
 		},

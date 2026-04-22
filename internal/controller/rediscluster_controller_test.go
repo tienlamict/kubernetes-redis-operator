@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	redisv1alpha1 "github.com/example/redis-operator/api/v1alpha1"
+	"github.com/example/redis-operator/internal/redis"
 	"github.com/example/redis-operator/internal/resources"
 )
 
@@ -294,6 +295,76 @@ func TestClusterReconcile_NilClusterManager_SkipsLifecycle(t *testing.T) {
 		types.NamespacedName{Name: "mycluster", Namespace: "default"}, updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).NotTo(Equal(redisv1alpha1.PhaseReady),
 		"phase must not be Ready when cluster lifecycle is skipped")
+}
+
+// TestClusterRollingFailover_RecordsLastConfigHash verifies that tryClusterRollingFailover
+// persists the current config hash in the CR annotation after the first reconcile.
+func TestClusterRollingFailover_RecordsLastConfigHash(t *testing.T) {
+	g := NewWithT(t)
+	rc := minimalCluster("mycluster", "default")
+	r := clusterReconciler(t, rc)
+	// Wire up a noop ClusterManager so tryClusterRollingFailover runs.
+	r.ClusterManager = &noopClusterManager{}
+	r.RedisClient = &noopRedisClient{}
+
+	reconcileClusterOnce(t, r, "mycluster", "default") // add finalizer
+	reconcileClusterOnce(t, r, "mycluster", "default") // create resources + record hash
+
+	updated := &redisv1alpha1.RedisCluster{}
+	g.Expect(r.Get(context.Background(),
+		types.NamespacedName{Name: "mycluster", Namespace: "default"}, updated)).To(Succeed())
+	g.Expect(updated.Annotations).To(HaveKey(lastConfigHashAnnotation),
+		"last-config-hash annotation should be recorded after reconcile")
+	g.Expect(updated.Annotations[lastConfigHashAnnotation]).To(HaveLen(16))
+}
+
+// TestClusterRollingFailover_TriggersFailoverOnNonHotReloadableChange verifies that
+// CLUSTER FAILOVER is called for each master's replica when the configHash changes
+// and the new config contains a non-hot-reloadable parameter.
+func TestClusterRollingFailover_TriggersFailoverOnNonHotReloadableChange(t *testing.T) {
+	g := NewWithT(t)
+	rc := minimalCluster("mycluster", "default")
+	// Set an initial last-config-hash annotation so the change is detected.
+	rc.Annotations = map[string]string{lastConfigHashAnnotation: "oldhashabcdefgh"}
+
+	mockClient := &noopRedisClient{}
+	// Return a cluster state with one master + one replica so we can verify failover call.
+	clusterSt := &redis.ClusterState{
+		State:         "ok",
+		SlotsAssigned: 16384,
+		Size:          3,
+		Nodes: []redis.ClusterNode{
+			{NodeID: "master1", Addr: "10.0.0.1:6379", Flags: []string{"master"}},
+			{NodeID: "replica1", Addr: "10.0.0.2:6379", Flags: []string{"slave"}, MasterID: "master1"},
+		},
+	}
+
+	s := buildScheme(t)
+	cb := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&redisv1alpha1.RedisCluster{}).
+		WithObjects(rc)
+	r := &RedisClusterReconciler{
+		Client:         cb.Build(),
+		Scheme:         s,
+		Recorder:       record.NewFakeRecorder(32),
+		RedisClient:    mockClient,
+		ClusterManager: &noopClusterManager{state: clusterSt},
+	}
+
+	// Add a non-hot-reloadable config param so rolling failover is triggered.
+	ctx := context.Background()
+	updated := &redisv1alpha1.RedisCluster{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: "mycluster", Namespace: "default"}, updated)).To(Succeed())
+	updated.Spec.RedisConfig = map[string]string{"appendonly": "yes"} // not in hotReloadableParams
+	g.Expect(r.Update(ctx, updated)).To(Succeed())
+
+	reconcileClusterOnce(t, r, "mycluster", "default") // finalizer
+	reconcileClusterOnce(t, r, "mycluster", "default") // resources + rolling failover
+
+	g.Expect(mockClient.clusterFailoverCalls).To(HaveLen(1),
+		"CLUSTER FAILOVER should be triggered once (one master→replica pair)")
+	g.Expect(mockClient.clusterFailoverCalls[0]).To(Equal("10.0.0.2:6379"),
+		"CLUSTER FAILOVER should target the replica address")
 }
 
 func TestClusterReconcile_ReplicaStatefulSet_OnlyWhenReplicasPerMasterGtZero(t *testing.T) {

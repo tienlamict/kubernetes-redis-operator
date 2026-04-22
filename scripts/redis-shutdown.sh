@@ -1,5 +1,6 @@
-#!/bin/bash
-# Graceful shutdown script for Redis pods.
+#!/bin/sh
+# Graceful shutdown script for Redis pods (reference copy — the operator inlines this
+# logic in the container pre-stop hook so no volume mount is required).
 # Handles both standalone/sentinel replicas and sentinel master failover.
 
 set -e
