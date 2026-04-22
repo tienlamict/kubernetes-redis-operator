@@ -136,6 +136,10 @@ func (r *RedisClusterReconciler) doReconcile(ctx context.Context, req ctrl.Reque
 	// --- Cluster lifecycle management ---
 	result, lifecycleErr := r.reconcileClusterLifecycle(ctx, rc)
 
+	// --- Rolling failover (best-effort): pre-trigger CLUSTER FAILOVER for masters
+	//     so Sentinel-elected replicas take over before the StatefulSet restarts pods.
+	r.tryClusterRollingFailover(ctx, rc, configHash)
+
 	// --- Hot-reload (best-effort) ---
 	r.tryClusterHotReload(ctx, rc)
 
@@ -651,6 +655,101 @@ func countReadyPods(list *corev1.PodList) int {
 		}
 	}
 	return count
+}
+
+// tryClusterRollingFailover pre-triggers CLUSTER FAILOVER on replicas when the
+// operator detects that a non-hot-reloadable config change requires a pod restart.
+// By initiating failovers before the StatefulSet rolling update restarts master pods,
+// each master hands off its slots gracefully and the cluster stays available throughout
+// the config rollout (spec section 3.3, step 14).
+//
+// The function is best-effort: errors are logged at V(1) and never returned.
+func (r *RedisClusterReconciler) tryClusterRollingFailover(ctx context.Context, rc *redisv1alpha1.RedisCluster, newConfigHash string) {
+	if r.RedisClient == nil || r.ClusterManager == nil {
+		return
+	}
+	lastHash := rc.Annotations[lastConfigHashAnnotation]
+	if lastHash == "" || lastHash == newConfigHash {
+		// No change, or first reconcile — just record the current hash.
+		r.recordLastConfigHash(ctx, rc, newConfigHash)
+		return
+	}
+
+	// Determine whether any non-hot-reloadable params changed.
+	hasRestartNeeded := false
+	for k := range rc.Spec.RedisConfig {
+		if !hotReloadableParams[k] {
+			hasRestartNeeded = true
+			break
+		}
+	}
+	if !hasRestartNeeded {
+		r.recordLastConfigHash(ctx, rc, newConfigHash)
+		return
+	}
+
+	logger := log.FromContext(ctx)
+	logger.Info("config change requires pod restart — pre-triggering CLUSTER FAILOVER on all masters",
+		"oldHash", lastHash, "newHash", newConfigHash)
+
+	state, err := r.ClusterManager.GetClusterState(ctx, clusterMasterAddr(rc, 0))
+	if err != nil {
+		logger.V(1).Info("cannot get cluster state for rolling failover", "err", err)
+		r.recordLastConfigHash(ctx, rc, newConfigHash)
+		return
+	}
+
+	// Build a set of master node IDs so we can find their replicas.
+	masterIDs := make(map[string]bool)
+	for _, n := range state.Nodes {
+		if isMaster(n) {
+			masterIDs[n.NodeID] = true
+		}
+	}
+
+	// Trigger CLUSTER FAILOVER on one replica per master.
+	for masterID := range masterIDs {
+		for _, n := range state.Nodes {
+			if n.MasterID == masterID && !isMaster(n) {
+				if err := r.RedisClient.ClusterFailover(ctx, n.Addr); err != nil {
+					logger.V(1).Info("CLUSTER FAILOVER failed", "replica", n.Addr, "err", err)
+				} else {
+					logger.V(1).Info("CLUSTER FAILOVER triggered", "replica", n.Addr, "masterID", masterID)
+				}
+				break // one replica per master is enough
+			}
+		}
+	}
+
+	r.Recorder.Event(rc, corev1.EventTypeNormal, "RollingFailover",
+		"Pre-triggered CLUSTER FAILOVER on replicas before config-driven pod restart")
+	r.recordLastConfigHash(ctx, rc, newConfigHash)
+}
+
+// recordLastConfigHash persists the last-applied config hash as a CR annotation.
+func (r *RedisClusterReconciler) recordLastConfigHash(ctx context.Context, rc *redisv1alpha1.RedisCluster, hash string) {
+	if rc.Annotations[lastConfigHashAnnotation] == hash {
+		return
+	}
+	patch := client.MergeFrom(rc.DeepCopy())
+	if rc.Annotations == nil {
+		rc.Annotations = make(map[string]string)
+	}
+	rc.Annotations[lastConfigHashAnnotation] = hash
+	if err := r.Patch(ctx, rc, patch); err != nil {
+		log.FromContext(ctx).V(1).Info("failed to update last-config-hash annotation", "err", err)
+	}
+}
+
+// isMaster reports whether a ClusterNode has the "master" flag set.
+// Defined here (not in internal/redis) so it can be used alongside controller logic.
+func isMaster(n redis.ClusterNode) bool {
+	for _, f := range n.Flags {
+		if f == "master" {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupWithManager registers the controller with the Manager.

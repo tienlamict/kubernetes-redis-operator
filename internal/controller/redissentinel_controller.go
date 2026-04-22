@@ -155,10 +155,22 @@ func (r *RedisSentinelReconciler) doReconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// handleDeletion removes PVCs (unless keepAfterDeletion) and clears the finalizer.
+// handleDeletion removes PVCs (unless keepAfterDeletion), resets Sentinel monitoring
+// state on all Sentinel pods, and clears the finalizer.
 func (r *RedisSentinelReconciler) handleDeletion(ctx context.Context, rs *redisv1alpha1.RedisSentinel) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(rs, redisv1alpha1.FinalizerName) {
 		return ctrl.Result{}, nil
+	}
+
+	// Best-effort: issue SENTINEL RESET * on each Sentinel pod so other Sentinels
+	// no longer monitor this now-deleted master group (spec 3.2 finalizer cleanup).
+	if r.RedisClient != nil {
+		logger := log.FromContext(ctx)
+		sentinelAddr := fmt.Sprintf("%s-sentinel.%s.svc.cluster.local:%d",
+			rs.Name, rs.Namespace, resources.SentinelPort)
+		if err := r.RedisClient.SentinelReset(ctx, sentinelAddr, "*"); err != nil {
+			logger.V(1).Info("SENTINEL RESET failed during deletion (non-fatal)", "err", err)
+		}
 	}
 
 	if rs.Spec.Storage != nil && !rs.Spec.Storage.KeepAfterDeletion {

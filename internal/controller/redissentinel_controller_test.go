@@ -210,6 +210,88 @@ func TestSentinelReconcile_ReplicaServiceSelector_UsesRoleLabel(t *testing.T) {
 		"replica service must select pods by role label")
 }
 
+// TestSentinelReconcile_RoleLabels_TracksActualMaster verifies that when RedisClient
+// returns a master IP, the matching pod is labelled "master" (not necessarily pod-0).
+func TestSentinelReconcile_RoleLabels_TracksActualMaster(t *testing.T) {
+	g := NewWithT(t)
+
+	// pod-1 is the actual master according to Sentinel.
+	pod0 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "myha-0",
+			Namespace: "default",
+			Labels:    resources.PodLabels("myha", resources.ComponentRedis),
+		},
+		Status: corev1.PodStatus{PodIP: "10.0.0.1"},
+	}
+	pod1 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "myha-1",
+			Namespace: "default",
+			Labels:    resources.PodLabels("myha", resources.ComponentRedis),
+		},
+		Status: corev1.PodStatus{PodIP: "10.0.0.2"},
+	}
+
+	mockClient := &noopRedisClient{masterIP: "10.0.0.2", masterPort: 6379}
+
+	s := buildScheme(t)
+	cb := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&redisv1alpha1.RedisSentinel{}).
+		WithObjects(minimalSentinel("myha", "default"), pod0, pod1)
+	r := &RedisSentinelReconciler{
+		Client:      cb.Build(),
+		Scheme:      s,
+		Recorder:    record.NewFakeRecorder(16),
+		RedisClient: mockClient,
+	}
+
+	reconcileSentinelOnce(t, r, "myha", "default") // add finalizer
+	reconcileSentinelOnce(t, r, "myha", "default") // reconcile resources + role labels
+
+	ctx := context.Background()
+
+	// pod-1 (IP 10.0.0.2) should be master.
+	p1 := &corev1.Pod{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: "myha-1", Namespace: "default"}, p1)).To(Succeed())
+	g.Expect(p1.Labels[resources.RoleLabelKey]).To(Equal(resources.RoleMaster),
+		"pod-1 should be labelled master since Sentinel reports its IP as master")
+
+	// pod-0 should be replica.
+	p0 := &corev1.Pod{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: "myha-0", Namespace: "default"}, p0)).To(Succeed())
+	g.Expect(p0.Labels[resources.RoleLabelKey]).To(Equal(resources.RoleReplica),
+		"pod-0 should be labelled replica when it is not the master")
+}
+
+// TestSentinelReconcile_Delete_CallsSentinelReset verifies SENTINEL RESET is issued
+// during finalizer cleanup when a RedisClient is configured.
+func TestSentinelReconcile_Delete_CallsSentinelReset(t *testing.T) {
+	g := NewWithT(t)
+	rs := minimalSentinel("myha", "default")
+	rs.Finalizers = []string{redisv1alpha1.FinalizerName}
+	now := metav1.Now()
+	rs.DeletionTimestamp = &now
+
+	mockClient := &noopRedisClient{}
+
+	s := buildScheme(t)
+	cb := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&redisv1alpha1.RedisSentinel{}).
+		WithObjects(rs)
+	r := &RedisSentinelReconciler{
+		Client:      cb.Build(),
+		Scheme:      s,
+		Recorder:    record.NewFakeRecorder(16),
+		RedisClient: mockClient,
+	}
+
+	reconcileSentinelOnce(t, r, "myha", "default")
+
+	g.Expect(mockClient.sentinelResetCalls).To(HaveLen(1),
+		"SENTINEL RESET should be called once during deletion")
+}
+
 func TestSentinelReconcile_RoleLabels_FallbackToPodZero(t *testing.T) {
 	g := NewWithT(t)
 
