@@ -389,7 +389,3 @@ make build       # outputs to ./bin/manager
 | 0.1.x (Phase 1) | 1.29 – 1.31 | 7.0 – 7.2 |
 
 ---
-
-## License
-
-This project is developed as a university thesis. All rights reserved.
