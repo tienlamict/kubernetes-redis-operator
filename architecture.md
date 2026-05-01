@@ -573,5 +573,3 @@ DeletionTimestamp set
 8. **Mở rộng**: ba CRD độc lập, thêm CRD mới chỉ cần thêm một reconciler + builders tương ứng — không đụng lõi hiện có.
 
 ---
-
-*Tài liệu sinh ngày 2026-04-22 dựa trên mã nguồn trên nhánh `claude/angry-leakey-d22609` (commit `30a84cc`).*
