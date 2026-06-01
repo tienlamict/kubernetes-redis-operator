@@ -1,6 +1,6 @@
 module github.com/example/redis-operator
 
-go 1.22.0
+go 1.25.10
 
 require (
 	github.com/onsi/ginkgo/v2 v2.22.0

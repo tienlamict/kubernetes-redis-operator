@@ -426,7 +426,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: '1.22' }
+        with: { go-version: '1.25.10' }
       - run: make lint
       - run: make test
       - uses: actions/upload-artifact@v4

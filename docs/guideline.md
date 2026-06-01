@@ -273,7 +273,7 @@ docker build -t redis-operator:dev .
 
 - `-t redis-operator:dev` = tag image (name:tag). `dev` là version tag tự chọn.
 - `.` = build context = thư mục hiện tại. Docker đọc `Dockerfile` ở root.
-- Dockerfile dùng multi-stage: `golang:1.22` để build (nó tự build lại bên trong, không cần bước B1 ở trên trừ khi muốn build local), `gcr.io/distroless/static:nonroot` chạy runtime.
+- Dockerfile dùng multi-stage: `golang:1.25.10` để build (nó tự build lại bên trong, không cần bước B1 ở trên trừ khi muốn build local), `gcr.io/distroless/static:nonroot` chạy runtime.
 
 > **Tip:** Dockerfile đã tự build Go code bên trong (xem [Dockerfile](Dockerfile)), nên thực ra **bước B1 không bắt buộc** nếu bạn chỉ muốn có image. Bước B1 hữu ích khi muốn debug binary ngoài Docker.
 
